@@ -1,9 +1,10 @@
+
 <!doctype html>
 <html lang="es">
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width,initial-scale=1" />
-<title>Monitor Sísmico (NAZCA & PIURA)</title>
+<title>Monitor Sísmico (NAZCA & PIURA) – Debug</title>
 <style>
   body{font-family:system-ui,Arial,sans-serif;margin:20px}
   .ok{color:#2e7d32}.leve{color:#f57c00}.alta{color:#c62828}
@@ -12,13 +13,20 @@
   th{background:#f5f5f5}
   .pill{padding:2px 8px;border-radius:12px;display:inline-block}
   .muted{color:#666}
+  .row{display:flex;gap:12px;align-items:center;flex-wrap:wrap}
+  .status{padding:4px 10px;border-radius:16px;background:#eee}
+  button{padding:6px 10px;border-radius:10px;border:1px solid #ccc;cursor:pointer}
 </style>
 </head>
 <body>
 <h1>Monitor Sísmico – Demo (NAZCA & PIURA)</h1>
-<p class="muted">
-  Broker: <code>test.mosquitto.org</code> (WSS) · Topic: <code>demo/sismo/+/estado</code>
-</p>
+<div class="row">
+  <div>Broker: <code id="broker">wss://test.mosquitto.org:8081/mqtt</code></div>
+  <div>Topic: <code id="topic">demo/sismo/+/estado</code></div>
+  <div class="status" id="conn">Estado: desconectado</div>
+  <button id="btnDemo" title="Publica un mensaje de prueba en demo/sismo/web-demo/estado">Publicar demo</button>
+</div>
+<p class="muted">Si no ves datos, pulsa <b>Publicar demo</b>. Si aparece una fila, la conexión por WebSockets funciona y el problema está en el ESP32/publicación MQTT.</p>
 
 <table>
   <thead>
@@ -31,17 +39,22 @@
 
 <script src="https://unpkg.com/paho-mqtt/mqttws31.min.js"></script>
 <script>
+  const BROKER_URL = "wss://test.mosquitto.org:8081/mqtt";
+  const SUB_TOPIC  = "demo/sismo/+/estado";
+  const TEST_TOPIC = "demo/sismo/web-demo/estado";
+
   const clientId = "web-" + Math.random().toString(16).slice(2);
-  const client = new Paho.MQTT.Client("wss://test.mosquitto.org:8081/mqtt", clientId);
+  const client = new Paho.MQTT.Client(BROKER_URL, clientId);
 
   const tbody = document.getElementById('tbody');
   const rows = {}; // device -> <tr>
+  const conn = document.getElementById('conn');
+  document.getElementById('broker').textContent = BROKER_URL;
+  document.getElementById('topic').textContent  = SUB_TOPIC;
 
-  function nivelClass(n){
-    if(n === "OK")   return "ok";
-    if(n === "LEVE") return "leve";
-    return "alta";
-  }
+  function setConn(state){ conn.textContent = "Estado: " + state; }
+
+  function nivelClass(n){ if(n==="OK")return"ok"; if(n==="LEVE")return"leve"; return"alta"; }
 
   function upsertRow(data){
     const d = data.device || "desconocido";
@@ -62,10 +75,7 @@
       rows[d] = tr;
     }
     tr.querySelector('.device').textContent = d;
-
-    const nivelTD = tr.querySelector('.nivel');
-    nivelTD.innerHTML = `<span class="pill ${nivelClass(data.nivel)}">${data.nivel}</span>`;
-
+    tr.querySelector('.nivel').innerHTML = `<span class="pill ${nivelClass(data.nivel)}">${data.nivel}</span>`;
     tr.querySelector('.nazca').textContent  = data.nazca;
     tr.querySelector('.piura').textContent  = data.piura;
     tr.querySelector('.total').textContent  = data.total;
@@ -76,27 +86,34 @@
 
   client.onConnectionLost = (res) => {
     console.log("Conexión perdida:", res.errorMessage);
+    setConn("desconectado");
     setTimeout(()=>client.connect({useSSL:true,onSuccess:onConnect}), 1500);
   };
 
   client.onMessageArrived = (msg) => {
-    try {
-      const data = JSON.parse(msg.payloadString);
-      upsertRow(data);
-    } catch(e){
-      console.error("JSON inválido:", e, msg.payloadString);
-    }
+    try { upsertRow(JSON.parse(msg.payloadString)); }
+    catch(e){ console.error("JSON inválido:", e, msg.payloadString); }
   };
 
-  function onConnect(){
-    console.log("Conectado (Web)");
-    client.subscribe("demo/sismo/+/estado");
-  }
+  function onConnect(){ console.log("Conectado (Web)"); setConn("conectado"); client.subscribe(SUB_TOPIC); }
 
   client.connect({useSSL:true,timeout:5,onSuccess:onConnect,onFailure:(e)=>{
     console.error("Fallo conexión:", e.errorMessage);
+    setConn("fallo conexión");
     setTimeout(()=>client.connect({useSSL:true,onSuccess:onConnect}), 2000);
   }});
+
+  // Botón: publicar demo
+  document.getElementById('btnDemo').onclick = () => {
+    if (!client.isConnected()) return alert("No conectado al broker (WSS)");
+    const msg = new Paho.MQTT.Message(JSON.stringify({
+      device: "web-demo", nivel: "LEVE", nazca: 1, piura: 0, total: 1, ultimo: "NAZCA", ip: "-"
+    }));
+    msg.destinationName = TEST_TOPIC;
+    msg.retained = true;
+    client.send(msg);
+    alert("Demo publicada en " + TEST_TOPIC);
+  };
 </script>
 </body>
 </html>
