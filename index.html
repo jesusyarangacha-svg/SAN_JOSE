@@ -1,0 +1,102 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Monitor Sísmico (NAZCA & PIURA)</title>
+<style>
+  body{font-family:system-ui,Arial,sans-serif;margin:20px}
+  .ok{color:#2e7d32}.leve{color:#f57c00}.alta{color:#c62828}
+  table{border-collapse:collapse;width:100%;max-width:900px}
+  th,td{border:1px solid #ddd;padding:8px;text-align:left}
+  th{background:#f5f5f5}
+  .pill{padding:2px 8px;border-radius:12px;display:inline-block}
+  .muted{color:#666}
+</style>
+</head>
+<body>
+<h1>Monitor Sísmico – Demo (NAZCA & PIURA)</h1>
+<p class="muted">
+  Broker: <code>test.mosquitto.org</code> (WSS) · Topic: <code>demo/sismo/+/estado</code>
+</p>
+
+<table>
+  <thead>
+    <tr>
+      <th>Device</th><th>Nivel</th><th>NAZCA</th><th>PIURA</th><th>Total</th><th>Último</th><th>IP</th><th>Hora</th>
+    </tr>
+  </thead>
+  <tbody id="tbody"></tbody>
+</table>
+
+<script src="https://unpkg.com/paho-mqtt/mqttws31.min.js"></script>
+<script>
+  const clientId = "web-" + Math.random().toString(16).slice(2);
+  const client = new Paho.MQTT.Client("wss://test.mosquitto.org:8081/mqtt", clientId);
+
+  const tbody = document.getElementById('tbody');
+  const rows = {}; // device -> <tr>
+
+  function nivelClass(n){
+    if(n === "OK")   return "ok";
+    if(n === "LEVE") return "leve";
+    return "alta";
+  }
+
+  function upsertRow(data){
+    const d = data.device || "desconocido";
+    let tr = rows[d];
+    if(!tr){
+      tr = document.createElement('tr');
+      tr.innerHTML = `
+        <td class="device"></td>
+        <td class="nivel"></td>
+        <td class="nazca"></td>
+        <td class="piura"></td>
+        <td class="total"></td>
+        <td class="ultimo"></td>
+        <td class="ip"></td>
+        <td class="hora"></td>
+      `;
+      tbody.appendChild(tr);
+      rows[d] = tr;
+    }
+    tr.querySelector('.device').textContent = d;
+
+    const nivelTD = tr.querySelector('.nivel');
+    nivelTD.innerHTML = `<span class="pill ${nivelClass(data.nivel)}">${data.nivel}</span>`;
+
+    tr.querySelector('.nazca').textContent  = data.nazca;
+    tr.querySelector('.piura').textContent  = data.piura;
+    tr.querySelector('.total').textContent  = data.total;
+    tr.querySelector('.ultimo').textContent = data.ultimo;
+    tr.querySelector('.ip').textContent     = data.ip || "";
+    tr.querySelector('.hora').textContent   = new Date().toLocaleTimeString();
+  }
+
+  client.onConnectionLost = (res) => {
+    console.log("Conexión perdida:", res.errorMessage);
+    setTimeout(()=>client.connect({useSSL:true,onSuccess:onConnect}), 1500);
+  };
+
+  client.onMessageArrived = (msg) => {
+    try {
+      const data = JSON.parse(msg.payloadString);
+      upsertRow(data);
+    } catch(e){
+      console.error("JSON inválido:", e, msg.payloadString);
+    }
+  };
+
+  function onConnect(){
+    console.log("Conectado (Web)");
+    client.subscribe("demo/sismo/+/estado");
+  }
+
+  client.connect({useSSL:true,timeout:5,onSuccess:onConnect,onFailure:(e)=>{
+    console.error("Fallo conexión:", e.errorMessage);
+    setTimeout(()=>client.connect({useSSL:true,onSuccess:onConnect}), 2000);
+  }});
+</script>
+</body>
+</html>
