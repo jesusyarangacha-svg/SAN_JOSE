@@ -3,61 +3,106 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width,initial-scale=1" />
-<title>Monitor Sísmico (NAZCA & PIURA) – Debug</title>
+<title>Monitor Sísmico – SAN_JOSE (NAZCA & PIURA)</title>
 <style>
-  body{font-family:system-ui,Arial,sans-serif;margin:20px}
-  .ok{color:#2e7d32}.leve{color:#f57c00}.alta{color:#c62828}
-  table{border-collapse:collapse;width:100%;max-width:900px}
+  :root{--ok:#2e7d32;--leve:#f57c00;--alta:#c62828;}
+  body{font-family:system-ui,Arial,sans-serif;margin:20px;line-height:1.35}
+  h1{margin:0 0 8px 0}
+  .muted{color:#666}
+  .row{display:flex;gap:12px;align-items:center;flex-wrap:wrap;margin:10px 0}
+  label{font-size:14px}
+  select,input[type=text]{padding:6px 8px;border:1px solid #ccc;border-radius:8px;min-width:260px}
+  button{padding:7px 12px;border-radius:10px;border:1px solid #ccc;cursor:pointer;background:#fafafa}
+  .status{padding:4px 10px;border-radius:16px;background:#eee}
+  .ok{color:var(--ok)} .leve{color:var(--leve)} .alta{color:var(--alta)}
+  table{border-collapse:collapse;width:100%;max-width:1100px;margin-top:10px}
   th,td{border:1px solid #ddd;padding:8px;text-align:left}
   th{background:#f5f5f5}
   .pill{padding:2px 8px;border-radius:12px;display:inline-block}
-  .muted{color:#666}
-  .row{display:flex;gap:12px;align-items:center;flex-wrap:wrap}
-  .status{padding:4px 10px;border-radius:16px;background:#eee}
-  button{padding:6px 10px;border-radius:10px;border:1px solid #ccc;cursor:pointer}
+  .small{font-size:12px}
 </style>
 </head>
 <body>
-<h1>Monitor Sísmico – Demo (NAZCA & PIURA)</h1>
+<h1>Monitor Sísmico – SAN_JOSE (NAZCA & PIURA)</h1>
+<p class="muted small">
+  Namespace: <code>jesusyarangacha-svg/san_jose/v1</code> ·
+  Topics: <code>.../devices/&lt;deviceId&gt;/estado</code> · <code>status</code> · <code>heartbeat</code>
+</p>
+
 <div class="row">
-  <div>Broker: <code id="broker">wss://test.mosquitto.org:8081/mqtt</code></div>
-  <div>Topic: <code id="topic">demo/sismo/+/estado</code></div>
-  <div class="status" id="conn">Estado: desconectado</div>
-  <button id="btnDemo" title="Publica un mensaje de prueba en demo/sismo/web-demo/estado">Publicar demo</button>
+  <label>Broker (WSS):</label>
+  <select id="brokerSelect">
+    <option value="wss://test.mosquitto.org:8081/mqtt">Mosquitto — wss://test.mosquitto.org:8081/mqtt</option>
+    <option value="wss://broker.hivemq.com:8884/mqtt">HiveMQ — wss://broker.hivemq.com:8884/mqtt</option>
+    <option value="wss://broker.emqx.io:8084/mqtt">EMQX — wss://broker.emqx.io:8084/mqtt</option>
+    <option value="wss://mqtt.eclipseprojects.io:443/mqtt">Eclipse — wss://mqtt.eclipseprojects.io:443/mqtt</option>
+  </select>
+  <input id="brokerCustom" type="text" placeholder="o pega aquí otra URL WSS completa (ej. wss://mi-dominio.com/mqtt)" />
 </div>
-<p class="muted">Si no ves datos, pulsa <b>Publicar demo</b>. Si aparece una fila, la conexión por WebSockets funciona y el problema está en el ESP32/publicación MQTT.</p>
+
+<div class="row">
+  <label>Filtrar por deviceId (opcional):</label>
+  <input id="filterDevice" type="text" placeholder="ej. esp32-1A2B" />
+  <button id="btnConnect">Conectar</button>
+  <button id="btnDisconnect">Desconectar</button>
+  <div class="status" id="conn">Estado: desconectado</div>
+</div>
 
 <table>
   <thead>
     <tr>
-      <th>Device</th><th>Nivel</th><th>NAZCA</th><th>PIURA</th><th>Total</th><th>Último</th><th>IP</th><th>Hora</th>
+      <th>Device</th><th>Nivel</th><th>NAZCA</th><th>PIURA</th><th>Total</th>
+      <th>Último</th><th>IP</th><th>Online</th><th>Uptime(s)</th><th>RSSI</th><th>Hora</th>
     </tr>
   </thead>
   <tbody id="tbody"></tbody>
 </table>
 
+<p class="muted small">La web se suscribe a:
+  <code id="subsEstado"></code>, <code id="subsStatus"></code> y <code id="subsHB"></code>
+</p>
+
 <script src="https://unpkg.com/paho-mqtt/mqttws31.min.js"></script>
 <script>
-  const BROKER_URL = "wss://mqtt.eclipseprojects.io/mqtt";
-  const SUB_TOPIC  = "demo/sismo/+/estado";
-  const TEST_TOPIC = "demo/sismo/web-demo/estado";
+  // ======== CONFIG ========
+  const NS = "jesusyarangacha-svg/san_jose/v1";
+  const TOPIC_ESTADO    = NS + "/devices/+/estado";
+  const TOPIC_STATUS    = NS + "/devices/+/status";
+  const TOPIC_HEARTBEAT = NS + "/devices/+/heartbeat";
 
-  const clientId = "web-" + Math.random().toString(16).slice(2);
-  const client = new Paho.MQTT.Client(BROKER_URL, clientId);
+  document.getElementById('subsEstado').textContent = TOPIC_ESTADO;
+  document.getElementById('subsStatus').textContent = TOPIC_STATUS;
+  document.getElementById('subsHB').textContent     = TOPIC_HEARTBEAT;
 
+  // ======== UI STATE ========
+  let client = null;
   const tbody = document.getElementById('tbody');
-  const rows = {}; // device -> <tr>
-  const conn = document.getElementById('conn');
-  document.getElementById('broker').textContent = BROKER_URL;
-  document.getElementById('topic').textContent  = SUB_TOPIC;
+  const rows  = {}; // deviceId -> <tr>
+  const conn  = document.getElementById('conn');
 
+  function nivelClass(n){
+    if(n === "OK") return "ok";
+    if(n === "LEVE") return "leve";
+    return "alta";
+  }
   function setConn(state){ conn.textContent = "Estado: " + state; }
 
-  function nivelClass(n){ if(n==="OK")return"ok"; if(n==="LEVE")return"leve"; return"alta"; }
+  function getSelectedBroker(){
+    const custom = document.getElementById('brokerCustom').value.trim();
+    if (custom) return custom;
+    return document.getElementById('brokerSelect').value;
+  }
 
-  function upsertRow(data){
-    const d = data.device || "desconocido";
-    let tr = rows[d];
+  function getDeviceFromTopic(topic){
+    // NS/devices/<deviceId>/<kind>
+    const parts = topic.split("/");
+    // parts: [jesusyarangacha-svg, san_jose, v1, devices, <deviceId>, <kind>]
+    if (parts.length >= 6) return { id: parts[4], kind: parts[5] };
+    return { id: "?", kind: "?" };
+  }
+
+  function upsertRow(device){
+    let tr = rows[device];
     if(!tr){
       tr = document.createElement('tr');
       tr.innerHTML = `
@@ -68,51 +113,97 @@
         <td class="total"></td>
         <td class="ultimo"></td>
         <td class="ip"></td>
-        <td class="hora"></td>
-      `;
+        <td class="online"></td>
+        <td class="uptime"></td>
+        <td class="rssi"></td>
+        <td class="hora"></td>`;
       tbody.appendChild(tr);
-      rows[d] = tr;
+      rows[device] = tr;
     }
-    tr.querySelector('.device').textContent = d;
-    tr.querySelector('.nivel').innerHTML = `<span class="pill ${nivelClass(data.nivel)}">${data.nivel}</span>`;
-    tr.querySelector('.nazca').textContent  = data.nazca;
-    tr.querySelector('.piura').textContent  = data.piura;
-    tr.querySelector('.total').textContent  = data.total;
-    tr.querySelector('.ultimo').textContent = data.ultimo;
-    tr.querySelector('.ip').textContent     = data.ip || "";
+    return tr;
+  }
+
+  function applyFilter(deviceId){
+    const filter = document.getElementById('filterDevice').value.trim();
+    return (!filter || filter === deviceId);
+  }
+
+  function handleEstado(deviceId, payload){
+    if (!applyFilter(deviceId)) return;
+    const tr = upsertRow(deviceId);
+    tr.querySelector('.device').textContent = deviceId;
+    tr.querySelector('.nivel').innerHTML = `<span class="pill ${nivelClass(payload.nivel)}">${payload.nivel}</span>`;
+    tr.querySelector('.nazca').textContent  = payload.nazca;
+    tr.querySelector('.piura').textContent  = payload.piura;
+    tr.querySelector('.total').textContent  = payload.total;
+    tr.querySelector('.ultimo').textContent = payload.ultimo;
+    tr.querySelector('.ip').textContent     = payload.ip || "";
     tr.querySelector('.hora').textContent   = new Date().toLocaleTimeString();
   }
 
-  client.onConnectionLost = (res) => {
-    console.log("Conexión perdida:", res.errorMessage);
-    setConn("desconectado");
-    setTimeout(()=>client.connect({useSSL:true,onSuccess:onConnect}), 1500);
-  };
+  function handleStatus(deviceId, text){
+    if (!applyFilter(deviceId)) return;
+    const tr = upsertRow(deviceId);
+    tr.querySelector('.device').textContent = deviceId;
+    tr.querySelector('.online').textContent = text;
+  }
 
-  client.onMessageArrived = (msg) => {
-    try { upsertRow(JSON.parse(msg.payloadString)); }
-    catch(e){ console.error("JSON inválido:", e, msg.payloadString); }
-  };
+  function handleHeartbeat(deviceId, payload){
+    if (!applyFilter(deviceId)) return;
+    const tr = upsertRow(deviceId);
+    tr.querySelector('.device').textContent = deviceId;
+    tr.querySelector('.uptime').textContent = (payload.uptime !== undefined ? payload.uptime : "");
+    tr.querySelector('.rssi').textContent   = (payload.rssi   !== undefined ? payload.rssi   : "");
+    tr.querySelector('.hora').textContent   = new Date().toLocaleTimeString();
+  }
 
-  function onConnect(){ console.log("Conectado (Web)"); setConn("conectado"); client.subscribe(SUB_TOPIC); }
+  // ======== MQTT ========
+  function connect(){
+    disconnect(); // limpia si había una previa
+    const brokerURL = getSelectedBroker();
+    const clientId = "web-" + Math.random().toString(16).slice(2);
+    try { client = new Paho.MQTT.Client(brokerURL, clientId); }
+    catch(e){ alert("No pude crear cliente MQTT: " + e); return; }
 
-  client.connect({useSSL:true,timeout:5,onSuccess:onConnect,onFailure:(e)=>{
-    console.error("Fallo conexión:", e.errorMessage);
-    setConn("fallo conexión");
-    setTimeout(()=>client.connect({useSSL:true,onSuccess:onConnect}), 2000);
-  }});
+    client.onConnectionLost = (res) => { setConn("desconectado"); };
+    client.onMessageArrived = (msg) => {
+      const { id, kind } = getDeviceFromTopic(msg.destinationName);
+      try{
+        if (kind === "estado")        handleEstado(id, JSON.parse(msg.payloadString));
+        else if (kind === "heartbeat") handleHeartbeat(id, JSON.parse(msg.payloadString));
+        else if (kind === "status")    handleStatus(id, msg.payloadString);
+      }catch(e){ console.error("Error parseando", e, msg.destinationName, msg.payloadString); }
+    };
 
-  // Botón: publicar demo
-  document.getElementById('btnDemo').onclick = () => {
-    if (!client.isConnected()) return alert("No conectado al broker (WSS)");
-    const msg = new Paho.MQTT.Message(JSON.stringify({
-      device: "web-demo", nivel: "LEVE", nazca: 1, piura: 0, total: 1, ultimo: "NAZCA", ip: "-"
-    }));
-    msg.destinationName = TEST_TOPIC;
-    msg.retained = true;
-    client.send(msg);
-    alert("Demo publicada en " + TEST_TOPIC);
-  };
+    client.connect({
+      useSSL: true,
+      timeout: 6,
+      onSuccess: () => {
+        setConn("conectado");
+        client.subscribe(TOPIC_ESTADO);
+        client.subscribe(TOPIC_STATUS);
+        client.subscribe(TOPIC_HEARTBEAT);
+      },
+      onFailure: (e) => {
+        setConn("fallo conexión");
+        console.error("Fallo conexión:", e.errorMessage);
+      }
+    });
+  }
+
+  function disconnect(){
+    try{
+      if (client && client.isConnected()) client.disconnect();
+      setConn("desconectado");
+    }catch(e){}
+  }
+
+  document.getElementById('btnConnect').onclick = connect;
+  document.getElementById('btnDisconnect').onclick = disconnect;
+
+  // Intenta conectar al cargar (con broker por defecto del selector)
+  window.addEventListener('load', connect);
 </script>
 </body>
 </html>
+
