@@ -62,7 +62,29 @@
   <code id="subsEstado"></code>, <code id="subsStatus"></code> y <code id="subsHB"></code>
 </p>
 
-<script src="https://unpkg.com/paho-mqtt/mqttws31.min.js"></script>
+<!-- CARGA ROBUSTA DE LA LIBRERÍA PAHO (con fallback de CDNs) -->
+<script>
+  const PAHO_CDNS = [
+    "https://cdn.jsdelivr.net/npm/paho-mqtt@1.1.0/paho-mqtt-min.js",
+    "https://unpkg.com/paho-mqtt@1.1.0/paho-mqtt-min.js",
+    "https://cdnjs.cloudflare.com/ajax/libs/paho-mqtt/1.0.1/mqttws31.min.js"
+  ];
+  function loadScriptSeq(urls){
+    return new Promise((resolve, reject)=>{
+      let i = 0;
+      const tryNext = ()=>{
+        if(i >= urls.length) return reject(new Error("No se pudo cargar Paho desde los CDNs"));
+        const s = document.createElement("script");
+        s.src = urls[i++];
+        s.onload = ()=> resolve();
+        s.onerror = ()=> { s.remove(); tryNext(); };
+        document.head.appendChild(s);
+      };
+      tryNext();
+    });
+  }
+</script>
+
 <script>
   // ======== CONFIG ========
   const NS = "jesusyarangacha-svg/san_jose/v1";
@@ -70,38 +92,37 @@
   const TOPIC_STATUS    = NS + "/devices/+/status";
   const TOPIC_HEARTBEAT = NS + "/devices/+/heartbeat";
 
-  document.getElementById('subsEstado').textContent = TOPIC_ESTADO;
-  document.getElementById('subsStatus').textContent = TOPIC_STATUS;
-  document.getElementById('subsHB').textContent     = TOPIC_HEARTBEAT;
+  document.addEventListener("DOMContentLoaded", ()=>{
+    document.getElementById('subsEstado').textContent = TOPIC_ESTADO;
+    document.getElementById('subsStatus').textContent = TOPIC_STATUS;
+    document.getElementById('subsHB').textContent     = TOPIC_HEARTBEAT;
+  });
 
   // ======== UI STATE ========
   let client = null;
-  const tbody = document.getElementById('tbody');
   const rows  = {}; // deviceId -> <tr>
-  const conn  = document.getElementById('conn');
 
   function nivelClass(n){
     if(n === "OK") return "ok";
     if(n === "LEVE") return "leve";
     return "alta";
   }
-  function setConn(state){ conn.textContent = "Estado: " + state; }
-
+  function setConn(state){
+    document.getElementById('conn').textContent = "Estado: " + state;
+  }
   function getSelectedBroker(){
     const custom = document.getElementById('brokerCustom').value.trim();
     if (custom) return custom;
     return document.getElementById('brokerSelect').value;
   }
-
   function getDeviceFromTopic(topic){
     // NS/devices/<deviceId>/<kind>
-    const parts = topic.split("/");
-    // parts: [jesusyarangacha-svg, san_jose, v1, devices, <deviceId>, <kind>]
-    if (parts.length >= 6) return { id: parts[4], kind: parts[5] };
+    const p = topic.split("/");
+    if (p.length >= 6) return { id: p[4], kind: p[5] };
     return { id: "?", kind: "?" };
   }
-
   function upsertRow(device){
+    const tbody = document.getElementById('tbody');
     let tr = rows[device];
     if(!tr){
       tr = document.createElement('tr');
@@ -122,12 +143,10 @@
     }
     return tr;
   }
-
   function applyFilter(deviceId){
     const filter = document.getElementById('filterDevice').value.trim();
     return (!filter || filter === deviceId);
   }
-
   function handleEstado(deviceId, payload){
     if (!applyFilter(deviceId)) return;
     const tr = upsertRow(deviceId);
@@ -140,20 +159,18 @@
     tr.querySelector('.ip').textContent     = payload.ip || "";
     tr.querySelector('.hora').textContent   = new Date().toLocaleTimeString();
   }
-
   function handleStatus(deviceId, text){
     if (!applyFilter(deviceId)) return;
     const tr = upsertRow(deviceId);
     tr.querySelector('.device').textContent = deviceId;
     tr.querySelector('.online').textContent = text;
   }
-
   function handleHeartbeat(deviceId, payload){
     if (!applyFilter(deviceId)) return;
     const tr = upsertRow(deviceId);
     tr.querySelector('.device').textContent = deviceId;
-    tr.querySelector('.uptime').textContent = (payload.uptime !== undefined ? payload.uptime : "");
-    tr.querySelector('.rssi').textContent   = (payload.rssi   !== undefined ? payload.rssi   : "");
+    tr.querySelector('.uptime').textContent = (payload.uptime ?? "");
+    tr.querySelector('.rssi').textContent   = (payload.rssi   ?? "");
     tr.querySelector('.hora').textContent   = new Date().toLocaleTimeString();
   }
 
@@ -165,7 +182,7 @@
     try { client = new Paho.MQTT.Client(brokerURL, clientId); }
     catch(e){ alert("No pude crear cliente MQTT: " + e); return; }
 
-    client.onConnectionLost = (res) => { setConn("desconectado"); };
+    client.onConnectionLost = () => setConn("desconectado");
     client.onMessageArrived = (msg) => {
       const { id, kind } = getDeviceFromTopic(msg.destinationName);
       try{
@@ -198,12 +215,18 @@
     }catch(e){}
   }
 
-  document.getElementById('btnConnect').onclick = connect;
-  document.getElementById('btnDisconnect').onclick = disconnect;
+  // BOTONES
+  function initButtons(){
+    document.getElementById('btnConnect').onclick = connect;
+    document.getElementById('btnDisconnect').onclick = disconnect;
+  }
 
-  // Intenta conectar al cargar (con broker por defecto del selector)
-  window.addEventListener('load', connect);
+  // Carga Paho y luego inicializa UI + conecta
+  window.addEventListener('load', ()=>{
+    loadScriptSeq(PAHO_CDNS)
+      .then(()=>{ initButtons(); connect(); })
+      .catch((e)=> alert("No se pudo cargar la librería Paho MQTT.\nDetalle: " + e.message + "\nPrueba recargar la página o desactivar bloqueadores."));
+  });
 </script>
 </body>
 </html>
-
