@@ -32,12 +32,12 @@
 <div class="row">
   <label>Broker (WSS):</label>
   <select id="brokerSelect">
-    <option value="wss://test.mosquitto.org:8081/mqtt">Mosquitto — wss://test.mosquitto.org:8081/mqtt</option>
+    <option value="wss://mqtt.eclipseprojects.io:443/mqtt">Eclipse — wss://mqtt.eclipseprojects.io:443/mqtt</option>
     <option value="wss://broker.hivemq.com:8884/mqtt">HiveMQ — wss://broker.hivemq.com:8884/mqtt</option>
     <option value="wss://broker.emqx.io:8084/mqtt">EMQX — wss://broker.emqx.io:8084/mqtt</option>
-    <option value="wss://mqtt.eclipseprojects.io:443/mqtt">Eclipse — wss://mqtt.eclipseprojects.io:443/mqtt</option>
+    <option value="wss://test.mosquitto.org:8081/mqtt">Mosquitto — wss://test.mosquitto.org:8081/mqtt</option>
   </select>
-  <input id="brokerCustom" type="text" placeholder="o pega aquí otra URL WSS completa (ej. wss://mi-dominio.com/mqtt)" />
+  <input id="brokerCustom" type="text" placeholder="o pega aquí otra URL WSS (ej. wss://mi-dominio.com/mqtt)" />
 </div>
 
 <div class="row">
@@ -45,6 +45,7 @@
   <input id="filterDevice" type="text" placeholder="ej. esp32-1A2B" />
   <button id="btnConnect">Conectar</button>
   <button id="btnDisconnect">Desconectar</button>
+  <button id="btnDemo">Publicar demo</button>
   <div class="status" id="conn">Estado: desconectado</div>
 </div>
 
@@ -62,18 +63,18 @@
   <code id="subsEstado"></code>, <code id="subsStatus"></code> y <code id="subsHB"></code>
 </p>
 
-<!-- CARGA ROBUSTA DE LA LIBRERÍA PAHO (con fallback de CDNs) -->
+<!-- ===== MQTT.js con fallback de 3 CDNs ===== -->
 <script>
-  const PAHO_CDNS = [
-    "https://cdn.jsdelivr.net/npm/paho-mqtt@1.1.0/paho-mqtt-min.js",
-    "https://unpkg.com/paho-mqtt@1.1.0/paho-mqtt-min.js",
-    "https://cdnjs.cloudflare.com/ajax/libs/paho-mqtt/1.0.1/mqttws31.min.js"
+  const MQTT_CDNS = [
+    "https://cdn.jsdelivr.net/npm/mqtt/dist/mqtt.min.js",
+    "https://unpkg.com/mqtt/dist/mqtt.min.js",
+    "https://cdnjs.cloudflare.com/ajax/libs/mqtt/5.10.1/mqtt.min.js"
   ];
   function loadScriptSeq(urls){
     return new Promise((resolve, reject)=>{
       let i = 0;
       const tryNext = ()=>{
-        if(i >= urls.length) return reject(new Error("No se pudo cargar Paho desde los CDNs"));
+        if(i >= urls.length) return reject(new Error("No se pudo cargar MQTT.js desde los CDNs"));
         const s = document.createElement("script");
         s.src = urls[i++];
         s.onload = ()=> resolve();
@@ -98,7 +99,7 @@
     document.getElementById('subsHB').textContent     = TOPIC_HEARTBEAT;
   });
 
-  // ======== UI STATE ========
+  // ======== UI & STATE ========
   let client = null;
   const rows  = {}; // deviceId -> <tr>
 
@@ -174,58 +175,78 @@
     tr.querySelector('.hora').textContent   = new Date().toLocaleTimeString();
   }
 
-  // ======== MQTT ========
+  // ======== MQTT (MQTT.js) ========
   function connect(){
     disconnect(); // limpia si había una previa
     const brokerURL = getSelectedBroker();
     const clientId = "web-" + Math.random().toString(16).slice(2);
-    try { client = new Paho.MQTT.Client(brokerURL, clientId); }
-    catch(e){ alert("No pude crear cliente MQTT: " + e); return; }
 
-    client.onConnectionLost = () => setConn("desconectado");
-    client.onMessageArrived = (msg) => {
-      const { id, kind } = getDeviceFromTopic(msg.destinationName);
-      try{
-        if (kind === "estado")        handleEstado(id, JSON.parse(msg.payloadString));
-        else if (kind === "heartbeat") handleHeartbeat(id, JSON.parse(msg.payloadString));
-        else if (kind === "status")    handleStatus(id, msg.payloadString);
-      }catch(e){ console.error("Error parseando", e, msg.destinationName, msg.payloadString); }
-    };
+    try {
+      // Conectar con MQTT.js
+      client = mqtt.connect(brokerURL, {
+        clientId,
+        clean: true,
+        connectTimeout: 8000,
+        reconnectPeriod: 0,   // sin auto-reconnect (controlado por botones)
+      });
+    } catch(e){
+      alert("No pude crear cliente MQTT: " + e);
+      return;
+    }
 
-    client.connect({
-      useSSL: true,
-      timeout: 6,
-      onSuccess: () => {
-        setConn("conectado");
-        client.subscribe(TOPIC_ESTADO);
-        client.subscribe(TOPIC_STATUS);
-        client.subscribe(TOPIC_HEARTBEAT);
-      },
-      onFailure: (e) => {
-        setConn("fallo conexión");
-        console.error("Fallo conexión:", e.errorMessage);
-      }
+    client.on('connect', () => {
+      setConn("conectado");
+      client.subscribe(TOPIC_ESTADO,  { qos: 0 });
+      client.subscribe(TOPIC_STATUS,  { qos: 0 });
+      client.subscribe(TOPIC_HEARTBEAT, { qos: 0 });
     });
+
+    client.on('message', (topic, payloadBuf) => {
+      const payloadStr = payloadBuf.toString();
+      const { id, kind } = getDeviceFromTopic(topic);
+      try{
+        if (kind === "estado")        handleEstado(id, JSON.parse(payloadStr));
+        else if (kind === "heartbeat") handleHeartbeat(id, JSON.parse(payloadStr));
+        else if (kind === "status")    handleStatus(id, payloadStr);
+      }catch(e){ console.error("Error parseando", e, topic, payloadStr); }
+    });
+
+    client.on('error', (err) => { setConn("error"); console.error("MQTT error:", err.message || err); });
+    client.on('close', () => setConn("desconectado"));
+    client.on('offline', () => setConn("offline"));
+    client.on('reconnect', () => setConn("reconectando..."));
   }
 
   function disconnect(){
     try{
-      if (client && client.isConnected()) client.disconnect();
+      if (client) { client.end(true); }
       setConn("desconectado");
+      client = null;
     }catch(e){}
   }
 
-  // BOTONES
+  function publishDemo(){
+    if (!client) { alert("No conectado"); return; }
+    const ns = "jesusyarangacha-svg/san_jose/v1";
+    const topic = ns + "/devices/web-demo/estado";
+    const payload = JSON.stringify({device:"web-demo",nivel:"LEVE",nazca:1,piura:0,total:1,ultimo:"NAZCA",ip:"-"});
+    client.publish(topic, payload, { qos:0, retain:true }, (err)=> {
+      if (err) alert("Error publicando demo: " + err);
+      else alert("Demo publicada en " + topic);
+    });
+  }
+
   function initButtons(){
     document.getElementById('btnConnect').onclick = connect;
     document.getElementById('btnDisconnect').onclick = disconnect;
+    document.getElementById('btnDemo').onclick = publishDemo;
   }
 
-  // Carga Paho y luego inicializa UI + conecta
+  // Carga MQTT.js y luego inicializa UI + conecta
   window.addEventListener('load', ()=>{
-    loadScriptSeq(PAHO_CDNS)
+    loadScriptSeq(MQTT_CDNS)
       .then(()=>{ initButtons(); connect(); })
-      .catch((e)=> alert("No se pudo cargar la librería Paho MQTT.\nDetalle: " + e.message + "\nPrueba recargar la página o desactivar bloqueadores."));
+      .catch((e)=> alert("No se pudo cargar la librería MQTT.js.\nDetalle: " + e.message + "\nPrueba recargar la página o desactivar bloqueadores."));
   });
 </script>
 </body>
